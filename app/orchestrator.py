@@ -6,7 +6,7 @@ from typing import Callable
 from app.models import ModelClient
 from app.rag.retriever import retrieve_documents
 from app.tools import TOOLS, Executor, Session
-from app.tools.errors import Code
+from app.tools.errors import Code, ServiceUnavailable
 
 BASE_PROMPT = """
 You are CampusConnect, a student-support assistant for CoCIS,
@@ -45,9 +45,14 @@ def tool_declarations() -> list[dict]:
     ]
 
 
-def describe_action(tool: str, args: dict, store) -> str:
+def describe_action(tool: str, args: dict, store, session=None) -> str:
     if tool == "submit_support_request":
-        row = store.get_request(args.get("case_ref", ""))
+        try:
+            row = store.get_request(args.get("case_ref", ""))
+        except ServiceUnavailable:
+            row = None   # the approval prompt must still appear; the executor re-checks the data on submit
+        if row and session is not None and row["student_id"] != session.student_id:
+            row = None   # never show another student's request text in an approval prompt
         detail = f' ("{row["summary"]}")' if row else ""
         return (
             f"Send support request {args.get('case_ref')}{detail} "
@@ -187,7 +192,7 @@ class Orchestrator:
                     )
 
                     question = describe_action(
-                        call.name, call.args, self.executor.store
+                        call.name, call.args, self.executor.store, session
                     )
                     granted = self.approver(question)
 
